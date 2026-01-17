@@ -1,0 +1,117 @@
+HardwareSerial SR(1);
+
+// Servo channels
+const int F_THUMB  = 0;
+const int F_INDEX  = 1;
+const int F_MIDDLE = 2;
+const int F_RING   = 3;
+const int F_PINKY  = 4;
+
+// LED pins
+const int LED_THUMB  = 27;
+const int LED_INDEX  = 26;
+const int LED_MIDDLE = 25;
+const int LED_RING   = 14;
+const int LED_PINKY  = 32;
+
+// Softer movement
+const int OPEN  = 1300;
+const int CLOSE = 1700;
+
+String input_cmd = "";
+
+void sendServo(int ch, int pos) {
+  SR.print("#"); SR.print(ch);
+  SR.print("P"); SR.print(pos);
+  SR.print("T600\r");
+
+  // Optional: debug print
+  // Serial.print("→ Servo "); Serial.print(ch);
+  // Serial.print(" = "); Serial.println(pos);
+}
+
+void setLED(String name, bool isClosed) {
+  int pin = -1;
+  if (name == "Thumb")  pin = LED_THUMB;
+  else if (name == "Index")  pin = LED_INDEX;
+  else if (name == "Middle") pin = LED_MIDDLE;
+  else if (name == "Ring")   pin = LED_RING;
+  else if (name == "Pinky")  pin = LED_PINKY;
+
+  if (pin != -1) {
+    digitalWrite(pin, isClosed ? HIGH : LOW);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  SR.begin(115200, SERIAL_8N1, 16, 17);
+
+  pinMode(LED_THUMB,  OUTPUT);
+  pinMode(LED_INDEX,  OUTPUT);
+  pinMode(LED_MIDDLE, OUTPUT);
+  pinMode(LED_RING,   OUTPUT);
+  pinMode(LED_PINKY,  OUTPUT);
+
+  // Turn off all LEDs initially
+  digitalWrite(LED_THUMB,  LOW);
+  digitalWrite(LED_INDEX,  LOW);
+  digitalWrite(LED_MIDDLE, LOW);
+  digitalWrite(LED_RING,   LOW);
+  digitalWrite(LED_PINKY,  LOW);
+
+  Serial.println("ESP32 Finger + LED Fix Ready");
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = Serial.read();
+
+    if (c == '\n') {
+      // Use a local buffer for strtok (modifies string)
+      char buffer[80];
+      input_cmd.trim(); // Remove any trailing \r
+      input_cmd.toCharArray(buffer, sizeof(buffer));
+
+      char* token = strtok(buffer, ",");
+      int parsedCount = 0;
+
+      while (token != nullptr && parsedCount < 5) {
+        String part = String(token);
+        int colonIndex = part.indexOf(':');
+        if (colonIndex == -1) {
+          token = strtok(nullptr, ",");
+          continue;
+        }
+
+        String name = part.substring(0, colonIndex);
+        String state = part.substring(colonIndex + 1);
+
+        bool commandedClosed = (state == "CLOSE");
+
+        // === SERVO: Apply mechanical reversal ONLY for Ring & Pinky ===
+        bool useReversedServo = (name == "Ring" || name == "Pinky");
+        bool servoClosed = useReversedServo ? !commandedClosed : commandedClosed;
+        int pos = servoClosed ? CLOSE : OPEN;
+
+        // Move correct servo
+        if (name == "Thumb")  sendServo(F_THUMB,  pos);
+        else if (name == "Index")  sendServo(F_INDEX,  pos);
+        else if (name == "Middle") sendServo(F_MIDDLE, pos);
+        else if (name == "Ring")   sendServo(F_RING,   pos);
+        else if (name == "Pinky")  sendServo(F_PINKY,  pos);
+
+        // === LED: Always reflect the *commanded* state (NO reversal) ===
+        setLED(name, commandedClosed);
+
+        parsedCount++;
+        token = strtok(nullptr, ",");
+      }
+
+      input_cmd = "";
+    } else {
+      input_cmd += c;
+      if (input_cmd.length() >= 79) input_cmd = ""; // Prevent overflow
+    }
+  }
+}
